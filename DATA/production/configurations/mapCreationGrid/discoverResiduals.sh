@@ -11,8 +11,19 @@
 #   ./discoverResiduals.sh <batch_file> [--calib-pass <pass>]
 #
 # Batch file format (one run per line, whitespace-separated):
-#   <period_token> <run>
+#   <period_token> <run> [<fill> <startTimestampMs>]
 #   e.g.:  LHC26ak 572557
+#          LHC26ac.b5p 569945 11500 1773347865674
+#
+# The last two columns are OPTIONAL and only needed for hybrid map creation (pp: fine-length maps for
+# the first part of a fill, coarse-length for the rest -- see submitMapCreation.sh's MAKE_HYBRID_MAPS).
+# When given, both must be present together: <fill> is the LHC fill number (shared by every run in it,
+# used to anchor the fine/coarse cutoff to the FILL's start rather than each run's own start -- a pp
+# fill routinely spans several runs), <startTimestampMs> is that run's start-of-run (SOR) timestamp,
+# UTC milliseconds (13 digits), same convention as the old SLURM-era makeStaggerd.py's metadata file.
+# When present, per_run() writes them to <RUN_DIR>/<RUN>.fillinfo.txt, which
+# stageSlotsForGrid.py --hybrid reads later, at submission time. Omit both columns for a
+# non-hybrid production -- nothing downstream needs them then.
 #
 # PERIOD is derived from the first field by stripping from the first '.' onward
 #   (e.g. LHC26ab.b5p → LHC26ab — a trailing '.xyz' suffix is tolerated but not
@@ -53,7 +64,7 @@ done
 # token on every row, so a batch legitimately spanning two periods must not silently inherit the
 # first row's period for all of its runs (that produced a valid-looking /alice/data/<year>/<wrong
 # period>/<run>/ query, which just finds nothing and degrades into a per-run warning).
-mapfile -t ENTRIES < <(awk 'NF > 0 && !/^[[:space:]]*#/ {print $1, $2}' "${BATCH_FILE}")
+mapfile -t ENTRIES < <(awk 'NF > 0 && !/^[[:space:]]*#/ {print $1, $2, $3, $4}' "${BATCH_FILE}")
 [[ ${#ENTRIES[@]} -gt 0 ]] || { echo "ERROR: no runs found in ${BATCH_FILE}"; exit 1; }
 
 # Validate every entry up front -- a malformed row should stop the batch here, not surface as one
@@ -61,14 +72,24 @@ mapfile -t ENTRIES < <(awk 'NF > 0 && !/^[[:space:]]*#/ {print $1, $2}' "${BATCH
 RUNS=()
 PERIODS_SEEN=()
 for entry in "${ENTRIES[@]}"; do
-    read -r _tok _run <<< "${entry}"
+    read -r _tok _run _fill _sor <<< "${entry}"
     [[ -n "${_tok}" && -n "${_run}" ]] \
-        || { echo "ERROR: malformed line in ${BATCH_FILE} (need '<period_token> <run>'): '${entry}'"; exit 1; }
+        || { echo "ERROR: malformed line in ${BATCH_FILE} (need '<period_token> <run> [<fill> <startTimestampMs>]'): '${entry}'"; exit 1; }
     [[ "${_run}" =~ ^[0-9]+$ ]] \
         || { echo "ERROR: run number is not numeric in ${BATCH_FILE}: '${entry}'"; exit 1; }
     # Field 1 example: LHC26ab.b5p  →  PERIOD=LHC26ab, YEAR=2026
     [[ "${_tok%%.*}" =~ LHC([0-9]{2}) ]] \
         || { echo "ERROR: cannot extract year from period token '${_tok}' (line: '${entry}')"; exit 1; }
+    # fill/startTimestampMs are optional, but only as a pair -- stageSlotsForGrid.py --hybrid needs
+    # both or neither, so one without the other is a malformed row, not a partially-specified one.
+    if [[ -n "${_fill}" || -n "${_sor}" ]]; then
+        [[ -n "${_fill}" && -n "${_sor}" ]] \
+            || { echo "ERROR: fill and startTimestampMs must both be given or both omitted in ${BATCH_FILE}: '${entry}'"; exit 1; }
+        [[ "${_fill}" =~ ^[0-9]+$ ]] \
+            || { echo "ERROR: fill number is not numeric in ${BATCH_FILE}: '${entry}'"; exit 1; }
+        [[ "${_sor}" =~ ^[0-9]{13}$ ]] \
+            || { echo "ERROR: startTimestampMs must be a 13-digit UTC-ms timestamp in ${BATCH_FILE}: '${entry}'"; exit 1; }
+    fi
     RUNS+=("${_run}")
     PERIODS_SEEN+=("${_tok%%.*}")
 done
@@ -113,6 +134,8 @@ per_run() {
     local CALIB_PASS="$3"
     local WORK_DIR="$4"
     local MAKE_LISTS_SCRIPT="$5"
+    local FILL="$6"                   # field 3 of this batch-file row, empty if omitted
+    local SOR="$7"                    # field 4 of this batch-file row, empty if omitted
 
     # Period/year come from THIS row, so a multi-period batch resolves each run against its own period.
     # Already validated in the caller's pre-flight loop, so a parse failure here would be a bug.
@@ -123,6 +146,12 @@ per_run() {
 
     local RUN_DIR="${WORK_DIR}/${RUN}"
     mkdir -p "${RUN_DIR}"
+
+    # Only for hybrid map creation (stageSlotsForGrid.py --hybrid reads this later); a non-hybrid batch
+    # file omits fill/SOR and no sidecar is written -- nothing downstream needs one then.
+    if [[ -n "${FILL}" && -n "${SOR}" ]]; then
+        printf '%s\t%s\n' "${FILL}" "${SOR}" > "${RUN_DIR}/${RUN}.fillinfo.txt"
+    fi
 
     local ALIEN_PATH="/alice/data/${YEAR}/${PERIOD}/${RUN}/${CALIB_PASS}/"
 
@@ -155,17 +184,18 @@ echo "========================================"
 echo "Launching ${#RUNS[@]} runs with N_PARALLEL=${N_PARALLEL}..."
 echo "========================================"
 
-# Fan out over the full "<period_token> <run>" entries, not bare run numbers, so each job carries its
-# own period. --colsep splits each entry into {1}=period token and {2}=run; note that under --colsep
-# a bare {} means column 1 ONLY, so both columns must be passed explicitly. --tagstring uses {2} to
-# keep the log prefix to just the run number.
-# shellcheck disable=SC1083  # {1}/{2} are GNU parallel replacement strings, not brace expansions
+# Fan out over the full "<period_token> <run> [<fill> <startTimestampMs>]" entries, not bare run
+# numbers, so each job carries its own period (and fill/SOR, when given). --colsep splits each entry
+# into {1}=period token, {2}=run, {3}=fill, {4}=SOR -- {3}/{4} come through as empty strings for a
+# 2-column row (awk already padded ENTRIES to 4 fields, see above), which per_run treats as "no
+# fillinfo sidecar for this run". --tagstring uses {2} to keep the log prefix to just the run number.
+# shellcheck disable=SC1083  # {1}/{2}/{3}/{4} are GNU parallel replacement strings, not brace expansions
 parallel \
     --jobs "${N_PARALLEL}" \
     --line-buffer \
     --colsep ' ' \
     --tagstring "[{2}]" \
-    per_run {1} {2} "${CALIB_PASS}" "${WORK_DIR}" "${MAKE_LISTS_SCRIPT}" \
+    per_run {1} {2} "${CALIB_PASS}" "${WORK_DIR}" "${MAKE_LISTS_SCRIPT}" {3} {4} \
     ::: "${ENTRIES[@]}"
 
 # ---------------------------------------------------------------------------
