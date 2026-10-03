@@ -230,6 +230,17 @@ cmd="(time root.exe -b -q -l -x '${QA_MACRO_PATH}+Og(\"ls ${OUTPUT_MAP_SMOOTH}\"
 echo "$(date) ${cmd}"
 eval "${cmd}" || echo "WARNING: voxResQA.C failed for this slot -- QA plots will be missing, but this doesn't affect ${OUTPUT_MAP_SMOOTH} itself" >&2
 
+# voxResQA.C names its c1D/c2D canvases (and so their PNGs) "c1D_<fileIDName><QA_SUFFIX>", where
+# fileIDName is derived from the input file name and just repeats what QA_SUFFIX already says. That
+# pushes the full LFN (OutputDir + file name) past AliEn's 255-character limit for two-digit TD
+# indices: upload succeeds, catalogue registration fails, and the subjob ends in ERROR_SV. Drop the
+# redundant part, same naming as cdXZvsRow<QA_SUFFIX>.png.
+for prefix in c1D c2D; do
+  for png in "${prefix}"_*"${QA_SUFFIX}.png"; do
+    [[ -f "${png}" ]] && mv -f "${png}" "${prefix}${QA_SUFFIX}.png"
+  done
+done
+
 QA_FILE_1D="voxResQA${QA_SUFFIX}_1D.root"
 QA_FILE_2D="voxResQA${QA_SUFFIX}_2D.root"
 
