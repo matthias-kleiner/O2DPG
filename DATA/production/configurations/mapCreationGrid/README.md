@@ -25,8 +25,18 @@ left as-is.
 
    `<batch_file>` lists one run per line: `<period> <run>`, e.g. `LHC26ak 572557`. (pp only, and only if
    you'll set `MAKE_HYBRID_MAPS=true` in step 2: add `<fill> <startTimestampMs>` — see "Hybrid time
-   sampling (pp)" under step 2.) For MC, use `--mc` and `MC_MODE=true` in step 2. See "MC productions"
-   under step 1.
+   sampling (pp)" under step 2.)
+
+   **MC:** use `--mc` instead of `--calib-pass`, with the MC production tag in place of the period:
+
+   ```bash
+   printf 'LHC26j19_residuals %s\n' 568336 568337 568338 > batch_mc.txt   # <prodTag> <anchorRun>
+   ./discoverResiduals.sh batch_mc.txt --mc
+   ```
+
+   This searches `/alice/sim/<year>/<prodTag>/0/<run>/` (`--mc-cycle <n>` for a production cycle other
+   than `0`). In step 2, also set `MC_MODE=true` and `BAD_RANGES_NAME=""`. Details: "MC productions" in
+   "The chain, in order" below.
 
 2. **Submit stage 1 (map creation).** In `submitMapCreation.sh`, set:
    - `BAD_RANGES_NAME` — the bad-time-ranges file for this data period (keep the default if it still
@@ -64,6 +74,20 @@ left as-is.
    Needs step 1's batch file to have carried `<fill> <startTimestampMs>` for these runs (see step 1
    above) — `submitMapCreation.sh` fails fast, before submitting anything, if any run named in
    `RUNS_FILTER` is missing that.
+
+   **MC production** (lists from `discoverResiduals.sh --mc` in step 1): set `MC_MODE=true`. Each run
+   then becomes one map over all of its files, with no time cut. `SLOT_LENGTH_MIN` is ignored, and
+   `MAKE_HYBRID_MAPS` must stay `false`. For example:
+
+   ```bash
+   JOBNAME="mapcreation-MC-LHC26j19-v1"   # unique per submission
+   BAD_RANGES_NAME=""                     # the data's bad-ranges list does not apply to MC
+   MC_MODE=true
+   MAKE_HYBRID_MAPS=false
+   ```
+
+   It should report `MC_MODE=true -- one map per run, no time cut` and one slot per run. Step 3 is the
+   same as for data.
 
 3. **Submit stage 2 (smoothing + FastTransform).** In `submitPostProcess.sh`, set `STAGE1_JOBNAME_TAG`
    to the exact `JOBNAME` used in step 2, then:
