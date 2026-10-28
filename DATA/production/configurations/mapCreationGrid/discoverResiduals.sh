@@ -9,6 +9,14 @@
 #
 # Usage:
 #   ./discoverResiduals.sh <batch_file> [--calib-pass <pass>]
+#   ./discoverResiduals.sh <batch_file> --mc [--mc-cycle <cycle>]
+#
+# --mc: the batch file lists MC productions instead of data periods. Field 1 is then the MC production
+# tag and field 2 the anchor run, e.g. "LHC26j19_residuals 568336", and the search path becomes
+# /alice/sim/<YEAR>/<prodTag>/<cycle>/<RUN>/ (cycle = --mc-cycle, default 0) instead of
+# /alice/data/<YEAR>/<PERIOD>/<RUN>/<calib-pass>/. MC residual files carry no time label in their
+# names, so makeResidualLists.sh writes them as one timeless list per run; submit those with
+# MC_MODE=true in submitMapCreation.sh (stageSlotsForGrid.py --mc).
 #
 # Batch file format (one run per line, whitespace-separated):
 #   <period_token> <run> [<fill> <startTimestampMs>]
@@ -40,12 +48,20 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 BATCH_FILE=""
 CALIB_PASS="cpass2_residuals"
+CALIB_PASS_SET=0
+MC_MODE=0
+MC_CYCLE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --calib-pass)
             [[ $# -lt 2 ]] && { echo "ERROR: --calib-pass requires an argument"; exit 1; }
-            CALIB_PASS="$2"; shift 2 ;;
+            CALIB_PASS="$2"; CALIB_PASS_SET=1; shift 2 ;;
+        --mc)
+            MC_MODE=1; shift ;;
+        --mc-cycle)
+            [[ $# -lt 2 ]] && { echo "ERROR: --mc-cycle requires an argument"; exit 1; }
+            MC_CYCLE="$2"; shift 2 ;;
         -*)
             echo "ERROR: Unknown option: $1"; exit 1 ;;
         *)
@@ -54,8 +70,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -z "${BATCH_FILE}" ]] && { echo "Usage: $0 <batch_file> [--calib-pass <pass>]"; exit 1; }
+[[ -z "${BATCH_FILE}" ]] && { echo "Usage: $0 <batch_file> [--calib-pass <pass>] | [--mc [--mc-cycle <cycle>]]"; exit 1; }
 [[ -f "${BATCH_FILE}" ]] || { echo "ERROR: batch file not found: ${BATCH_FILE}"; exit 1; }
+# The data and MC paths share no component after the year, so a flag of the other mode is a mistake,
+# not something to ignore.
+if (( MC_MODE )); then
+    (( CALIB_PASS_SET )) && { echo "ERROR: --calib-pass is a data-only option, the MC path has no calib-pass level"; exit 1; }
+    MC_CYCLE="${MC_CYCLE:-0}"
+    [[ "${MC_CYCLE}" =~ ^[0-9]+$ ]] || { echo "ERROR: --mc-cycle must be numeric, got '${MC_CYCLE}'"; exit 1; }
+else
+    [[ -n "${MC_CYCLE}" ]] && { echo "ERROR: --mc-cycle needs --mc"; exit 1; }
+    # Never used in data mode, but per_run takes it positionally and GNU parallel would drop an empty word.
+    MC_CYCLE="0"
+fi
 
 # ---------------------------------------------------------------------------
 # Parse the batch file into one "<period_token> <run>" entry per line
@@ -114,8 +141,13 @@ MAKE_LISTS_SCRIPT="${SCRIPT_DIR}/makeResidualLists.sh"
 # ---------------------------------------------------------------------------
 
 echo "Batch file  : ${BATCH_FILE}"
-echo "Period(s)   : ${PERIODS_UNIQ[*]}"
-echo "Calib pass  : ${CALIB_PASS}"
+if (( MC_MODE )); then
+    echo "MC prod(s)  : ${PERIODS_UNIQ[*]}"
+    echo "MC cycle    : ${MC_CYCLE}"
+else
+    echo "Period(s)   : ${PERIODS_UNIQ[*]}"
+    echo "Calib pass  : ${CALIB_PASS}"
+fi
 echo "Runs (${#RUNS[@]}): ${RUNS[*]}"
 echo
 
@@ -134,8 +166,10 @@ per_run() {
     local CALIB_PASS="$3"
     local WORK_DIR="$4"
     local MAKE_LISTS_SCRIPT="$5"
-    local FILL="$6"                   # field 3 of this batch-file row, empty if omitted
-    local SOR="$7"                    # field 4 of this batch-file row, empty if omitted
+    local MC_MODE="$6"                # 1: field 1 is an MC production tag, search /alice/sim
+    local MC_CYCLE="$7"               # MC production cycle (path level after the tag), unused for data
+    local FILL="$8"                   # field 3 of this batch-file row, empty if omitted
+    local SOR="$9"                    # field 4 of this batch-file row, empty if omitted
 
     # Period/year come from THIS row, so a multi-period batch resolves each run against its own period.
     # Already validated in the caller's pre-flight loop, so a parse failure here would be a bug.
@@ -154,6 +188,9 @@ per_run() {
     fi
 
     local ALIEN_PATH="/alice/data/${YEAR}/${PERIOD}/${RUN}/${CALIB_PASS}/"
+    if (( MC_MODE )); then
+        ALIEN_PATH="/alice/sim/${YEAR}/${PERIOD}/${MC_CYCLE}/${RUN}/"
+    fi
 
     echo "========================================"
     echo "Processing run ${RUN} (period ${PERIOD}, year ${YEAR})"
@@ -195,7 +232,7 @@ parallel \
     --line-buffer \
     --colsep ' ' \
     --tagstring "[{2}]" \
-    per_run {1} {2} "${CALIB_PASS}" "${WORK_DIR}" "${MAKE_LISTS_SCRIPT}" {3} {4} \
+    per_run {1} {2} "${CALIB_PASS}" "${WORK_DIR}" "${MAKE_LISTS_SCRIPT}" "${MC_MODE}" "${MC_CYCLE}" {3} {4} \
     ::: "${ENTRIES[@]}"
 
 # ---------------------------------------------------------------------------

@@ -146,6 +146,12 @@ SLOT_LENGTH_MIN_COARSE=60  # only used when MAKE_HYBRID_MAPS=true: target length
                        # runt window on either side of it.
 FINE_WINDOW_MIN=60     # only used when MAKE_HYBRID_MAPS=true: duration, in minutes, of the fine
                        # sampling window measured from the FILL's start.
+MC_MODE=false          # true/false. true for lists built by discoverResiduals.sh --mc: MC residual files
+                       # carry no time label, so each run becomes ONE map over all of its files, with
+                       # window bounds 0 0 (switches off the macro's per-TF time cut). SLOT_LENGTH_MIN is
+                       # ignored, MAKE_HYBRID_MAPS=true is an error. BAD_RANGES_NAME still applies, by the
+                       # anchor run's orbits -- set it to "" unless you want the data's bad ranges cut
+                       # from the MC too.
 # ---------------------------------------------------------------------------
 
 MACRO_ALIEN_DIR="alien://${MACRO_ALIEN_DIR_BARE}"
@@ -204,6 +210,10 @@ if [[ "${MAKE_HYBRID_MAPS}" == "true" ]]; then
     --fine-window-min        "${FINE_WINDOW_MIN}"
   )
   echo "== MAKE_HYBRID_MAPS=true -- fine=${SLOT_LENGTH_MIN}min for the first ${FINE_WINDOW_MIN}min of each fill, coarse=${SLOT_LENGTH_MIN_COARSE}min for the rest =="
+fi
+if [[ "${MC_MODE}" == "true" ]]; then
+  STAGE_ARGS+=(--mc)
+  echo "== MC_MODE=true -- one map per run, no time cut (BAD_RANGES_NAME='${BAD_RANGES_NAME}') =="
 fi
 echo "== Building + uploading slot manifest from ${LISTS_DIR} (as ${MANIFEST_NAME}) =="
 N=$("${SCRIPT_DIR}/stageSlotsForGrid.py" "${STAGE_ARGS[@]}")

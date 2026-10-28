@@ -25,7 +25,8 @@ left as-is.
 
    `<batch_file>` lists one run per line: `<period> <run>`, e.g. `LHC26ak 572557`. (pp only, and only if
    you'll set `MAKE_HYBRID_MAPS=true` in step 2: add `<fill> <startTimestampMs>` — see "Hybrid time
-   sampling (pp)" under step 2.)
+   sampling (pp)" under step 2.) For MC, use `--mc` and `MC_MODE=true` in step 2. See "MC productions"
+   under step 1.
 
 2. **Submit stage 1 (map creation).** In `submitMapCreation.sh`, set:
    - `BAD_RANGES_NAME` — the bad-time-ranges file for this data period (keep the default if it still
@@ -250,6 +251,34 @@ it adds to it, and Step 2 by default puts *everything* under `./lists/` into the
 silently recalibrates the earlier batch from scratch at hours per slot. Either use a fresh `listsDir`
 per batch, or set `RUNS_FILTER` in the Step-2 wrapper (see below).
 
+#### MC productions
+
+MC residuals live under `/alice/sim/<year>/<prodTag>/<cycle>/<anchorRun>/<NNN>/o2tpc_residuals.root`,
+not under a data period's calib pass. Use `--mc`, with the production tag in place of the period:
+
+```bash
+cat > batch_mc.txt <<EOF
+LHC26j19_residuals 568336
+LHC26j19_residuals 568337
+EOF
+./discoverResiduals.sh batch_mc.txt --mc               # cycle 0; --mc-cycle <n> for another one
+```
+
+The year is taken from the tag (`LHC26…` → 2026). `--calib-pass` is rejected with `--mc`, since the MC
+path has no such level.
+
+MC file names carry no `<firstTS>_<lastTS>` label, so there is nothing to cut windows from:
+`makeResidualLists.sh` writes one list per run (`residuals.all.<run>.txt`), and Step 2 needs
+`MC_MODE=true`. Each run then becomes **one** map over all of its files, with window bounds `0 0`, which
+switches off the macro's per-TF time cut (`firstTFTime > 0` is its condition). `MAX_TRACKS_PER_SLICE`
+still caps the statistics. MC paths carry no `_orbit` field, so `mapCreationJob.sh` leaves the file order
+as listed. Staging refuses to mix the two kinds: data lists with `--mc`, or `MAKE_HYBRID_MAPS=true` with
+`MC_MODE=true`, are errors, and MC lists without `--mc` are skipped with a warning naming the flag.
+
+Two things work differently in stage 2: `mapMeta.txt` gets `tsStart=0`, `tsEnd=0`, and `fill=-1`. The
+bad-time-ranges list is applied by the anchor run's orbits, so set `BAD_RANGES_NAME=""` unless you want
+the data's bad ranges cut from the MC too.
+
 ### Step 2 — configure and submit stage 1 (map creation)
 
 Edit the config block at the top of **`submitMapCreation.sh`**:
@@ -262,6 +291,7 @@ Edit the config block at the top of **`submitMapCreation.sh`**:
 | `MAKE_HYBRID_MAPS` | `true`/`false` (default `false`). Hybrid time sampling for pp: `SLOT_LENGTH_MIN`-length ("fine") maps for the first `FINE_WINDOW_MIN` minutes of each **fill**, `SLOT_LENGTH_MIN_COARSE`-length ("coarse") maps for the rest of that fill — see "Hybrid time sampling (pp)" below. |
 | `SLOT_LENGTH_MIN_COARSE` | Only used when `MAKE_HYBRID_MAPS=true`: target length of one **coarse** map, in minutes. Same `0`/trailing-remainder semantics as `SLOT_LENGTH_MIN`, applied independently within the coarse region. |
 | `FINE_WINDOW_MIN` | Only used when `MAKE_HYBRID_MAPS=true`: duration, in minutes, of the fine-sampling window measured from the fill's start (default `60`). |
+| `MC_MODE` | `true`/`false` (default `false`). `true` for lists from `discoverResiduals.sh --mc`: one map per run, no time cut, `SLOT_LENGTH_MIN` ignored — see "MC productions" under Step 1. |
 | `PACKAGESPEC` | O2/O2DPG software tag to run under — set this to the async-reco tag matching your data. Also determines whether `MACRO_SOURCE=official` can find the macros (see "Where the macros come from" above). |
 | `ASUSER` | AliEn account this job runs/is charged as, e.g. `pwg_pp` (your account must already be a member of that group) instead of your own personal account/quota. Determines both which quota pays for the job and where its `${ALIEN_JDL_OUTPUTDIR}` lands (see Step 3). Verify on alimonitor that the first job is really attributed correctly before relying on it for a big batch. |
 | `MACRO_SOURCE` / `MACRO_LOCAL_PATH` | See "Where the macros come from" above. |

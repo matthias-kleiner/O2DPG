@@ -98,6 +98,12 @@ def parse_args(argv):
     p.add_argument("--fine-window-min", type=float, default=60,
                    help="duration of the fine-sampling window, in minutes, measured from the FILL's "
                         "start. Only used with --hybrid.")
+    p.add_argument("--mc", action="store_true",
+                   help="MC input (discoverResiduals.sh --mc). MC residual files carry no time label, "
+                        "so there is nothing to window on: each run becomes ONE window holding all of "
+                        "its files, with bounds 0 0, which switches off staticMapCreatorCPM.C's per-TF "
+                        "time cut (it only applies for firstTFTime > 0). --slot-length-min is ignored; "
+                        "--hybrid is an error. A list with time-labelled (data) files is an error too.")
     p.add_argument("--window-lists", action="store_true",
                    help="also write one plain file list per window, for inspecting which files a "
                         "window got. OFF by default: on Lustre each is a metadata round trip and 120 "
@@ -234,6 +240,12 @@ def main(argv):
     slot_ms = int(round(args.slot_length_min * 60_000))
     wanted = [r for r in args.runs.split(",") if r] if args.runs else []
 
+    if args.mc and args.hybrid:
+        log("ERROR: --mc and --hybrid are exclusive -- MC residual files carry no time label to window on")
+        return 1
+    if args.mc and args.slot_length_min:
+        log(f"NOTE: --mc -- ignoring --slot-length-min {args.slot_length_min}, one window per run")
+
     if args.hybrid and args.slot_length_min_coarse is None:
         log("ERROR: --hybrid requires --slot-length-min-coarse (no default -- pass 0 explicitly if you "
             "really want a single coarse window per fill's post-fine tail)")
@@ -306,23 +318,36 @@ def main(argv):
             _text = slot_file.read_text()
             t_read += time.monotonic() - _t
             _t = time.monotonic()
-            parsed = []
-            for line in _text.splitlines():
-                m = SIG_RE.search(line)
-                if m:
-                    parsed.append((int(m.group(1)), int(m.group(2)), line))
-            if not parsed:
-                log(f"  WARNING: no parseable residual signature in {slot_file}, skipping")
-                continue
+            if args.mc:
+                files = [l.strip() for l in _text.splitlines() if l.strip()]
+                # A time label means data: windowing it as MC would silently drop the per-TF time cut
+                # and merge a whole run into one map.
+                if any(SIG_RE.search(l) for l in files):
+                    log(f"ERROR: --mc, but {slot_file} holds time-labelled (data) residual files -- "
+                        f"drop --mc for data")
+                    return 1
+                if not files:
+                    log(f"  WARNING: no residual files in {slot_file}, skipping")
+                    continue
+                wins = [(0, 0, 0, 0)]
+                buckets, grazed, orphans = [files], [0], []
+            else:
+                parsed = []
+                for line in _text.splitlines():
+                    m = SIG_RE.search(line)
+                    if m:
+                        parsed.append((int(m.group(1)), int(m.group(2)), line))
+                if not parsed:
+                    log(f"  WARNING: no parseable residual signature in {slot_file}, skipping "
+                        f"(MC lists need --mc)")
+                    continue
 
-            t_calc += time.monotonic() - _t
-            _t = time.monotonic()
-            run_first = min(p[0] for p in parsed)
-            run_last = max(p[1] for p in parsed)
-            fine_cutoff_ts = fill_start[fill_of_run[run]] + fine_ms if args.hybrid else None
-            wins = plan_windows(run_first, run_last, slot_ms, args.overlap_margin_ms,
-                                 fine_cutoff_ts=fine_cutoff_ts, slot_ms_coarse=slot_ms_coarse)
-            buckets, grazed, orphans = assign(parsed, wins)
+                run_first = min(p[0] for p in parsed)
+                run_last = max(p[1] for p in parsed)
+                fine_cutoff_ts = fill_start[fill_of_run[run]] + fine_ms if args.hybrid else None
+                wins = plan_windows(run_first, run_last, slot_ms, args.overlap_margin_ms,
+                                     fine_cutoff_ts=fine_cutoff_ts, slot_ms_coarse=slot_ms_coarse)
+                buckets, grazed, orphans = assign(parsed, wins)
             n_win = len(wins)
             t_calc += time.monotonic() - _t
 
@@ -339,6 +364,8 @@ def main(argv):
                     t_write += time.monotonic() - _t
                 manifest_lines.append(f"{run}\t{w}\t{n_win}\t{ws}\t{we}\t{','.join(files)}")
                 kind = f" ({'FINE' if w_slot_ms == slot_ms else 'COARSE'})" if args.hybrid else ""
+                if args.mc:
+                    kind = " (MC, no time cut)"
                 log(f"    window {w}/{n_win} [{ws},{we}] {(we - ws) // 1000}s{kind} {len(files)} file(s)")
                 n_slots_run += 1
 
