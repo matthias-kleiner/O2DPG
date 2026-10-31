@@ -66,7 +66,21 @@ if [[ ! -f "${GBL_DIR}/include/GblTrajectory.h" || ! -f "${EIGEN_DIR}/include/ei
 fi
 export ROOT_INCLUDE_PATH="${GBL_DIR}/include:${EIGEN_DIR}/include/eigen3${ROOT_INCLUDE_PATH:+:${ROOT_INCLUDE_PATH}}"
 export LD_LIBRARY_PATH="${GBL_DIR}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-echo "GBL: ${GBL_DIR}, Eigen: ${EIGEN_DIR}"
+# GBL >= V04 includes Mille's headers (Mille/MilleFactory.h) and libGBL needs libMille2
+MILLE_DIR="${MILLE_ROOT:-}"
+if [[ -z "${MILLE_DIR}" && -n "${BASEDIR:-}" ]]; then
+  MILLE_MODULE=$(tr ':' '\n' <<< "${LOADEDMODULES:-}" | grep '^Mille/' | head -1)
+  [[ -n "${MILLE_MODULE}" ]] && MILLE_DIR="${BASEDIR}/${MILLE_MODULE}"
+fi
+if grep -q '#include "Mille/' "${GBL_DIR}/include/GblTrajectory.h"; then
+  if [[ ! -f "${MILLE_DIR}/include/Mille/MilleFactory.h" ]]; then
+    echo "ERROR: GBL includes Mille's headers, but Mille was not found (MILLE_DIR='${MILLE_DIR}') -- set MILLE_ROOT" >&2
+    exit 1
+  fi
+  export ROOT_INCLUDE_PATH="${MILLE_DIR}/include:${ROOT_INCLUDE_PATH}"
+  export LD_LIBRARY_PATH="${MILLE_DIR}/lib:${LD_LIBRARY_PATH}"
+fi
+echo "GBL: ${GBL_DIR}, Eigen: ${EIGEN_DIR}, Mille: ${MILLE_DIR:-not needed}"
 
 # this subjob's slot: the same manifest line as stage 1 / stage 2
 alien.py cp -f "${MACRO_ALIEN_DIR}/mapSlots.${STAGE1_JOBNAME_TAG}.tsv" file:./mapSlots.tsv
