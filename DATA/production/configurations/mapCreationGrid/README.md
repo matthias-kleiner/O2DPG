@@ -11,6 +11,10 @@ install to `$O2_ROOT/share/macro/` as part of a normal O2 build -- this director
 submission/orchestration layer (list discovery, manifest staging, `grid_submit.sh` wrappers, per-slot
 job scripts).
 
+An optional third stage makes the **fine map** of every slot (`fineMapCreatorGBL.C`, same directory as
+`staticMapCreatorCPM.C`): a TPC-only track fit on the residual clusters corrected with that slot's coarse map
+from stage 2, giving what the coarse map leaves — see "Step 5" below.
+
 ## Quickstart
 
 For a normal production on the official O2 build, with defaults left alone, only two settings usually
@@ -99,6 +103,15 @@ left as-is.
    This takes minutes per map and produces the final smoothed map, the `FT_*.root` FastTransform file,
    and QA plots.
 
+4. **Optional: submit stage 3 (fine map).** In `submitFineMap.sh`, set `STAGE1_JOBNAME_TAG` and
+   `STAGE2_JOBNAME_TAG` to the `JOBNAME`s of steps 2 and 3 and a new `JOBNAME`, then:
+
+   ```bash
+   ./submitFineMap.sh
+   ```
+
+   One fine map per coarse map, same slots. Hours per map — see "Step 5" below.
+
 Everything else in this document explains what the other settings do and how to debug things when they
 don't go as expected — skip ahead to it only if you need to change something beyond the three above.
 
@@ -119,12 +132,12 @@ don't go as expected — skip ahead to it only if you need to change something b
   alien account>`, or set `MAPCREATION_ALIEN_DIR` to override the whole path. This directory only holds
   the slot manifest, the bad-time-ranges list, and the `stage1Workdir` pointer files -- not the actual
   map data (see Step 3) -- and, if `MACRO_SOURCE=alien` (see below), a staged copy of the macros.
-- A `--packagespec` tag whose O2 build includes the four macros above, **or** `MACRO_SOURCE=alien` (see
-  "Where the macros come from" below) if no such tag is published yet.
+- A `--packagespec` tag whose O2 build includes the four macros above (and `fineMapCreatorGBL.C` for stage
+  3), **or** `MACRO_SOURCE=alien` (see "Where the macros come from" below) if no such tag is published yet.
 
 ## Where the macros come from (`MACRO_SOURCE`)
 
-Every payload script (`mapCreationJob.sh`, `postProcessJob.sh`) reads a
+Every payload script (`mapCreationJob.sh`, `postProcessJob.sh`, `fineMapJob.sh`) reads a
 `MACRO_SOURCE` variable, substituted by its wrapper the same way as `JOBNAME_TAG`:
 
 - **`official` (default)**: runs the macros straight from the O2 package this job's `--packagespec`
@@ -133,8 +146,8 @@ Every payload script (`mapCreationJob.sh`, `postProcessJob.sh`) reads a
   `staticMapCreator.C`/`TPCFastTransformInit.C` pair. Requires `PACKAGESPEC` to resolve to an O2 build new
   enough to include `staticMapCreatorCPM.C` et al. If it doesn't, the job fails fast with a clear error
   rather than silently falling back.
-- **`alien`**: stages a macro from a local path (`MACRO_LOCAL_PATH` in `submitMapCreation.sh`,
-  `MACRO_LOCAL_DIR` in `submitPostProcess.sh`) to AliEn, and jobs download it
+- **`alien`**: stages a macro from a local path (`MACRO_LOCAL_PATH` in `submitMapCreation.sh` and
+  `submitFineMap.sh`, `MACRO_LOCAL_DIR` in `submitPostProcess.sh`) to AliEn, and jobs download it
   from there instead. Use this until a `--packagespec` tag with the macros is published — point
   `MACRO_LOCAL_PATH`/`MACRO_LOCAL_DIR` at your own O2 checkout's copy of the macro(s).
 
@@ -149,7 +162,11 @@ submitMapCreation.sh   (submits)   STAGE 1: map creation (hours/slot)
         ▼   (wait for jobs to finish on alimonitor)
         │
 submitPostProcess.sh   (submits)   STAGE 2: smoothing + FastTransform (minutes/slot)
-                                     └─ per-slot payload: postProcessJob.sh
+        │                            └─ per-slot payload: postProcessJob.sh
+        ▼   (optional; wait for stage 2)
+        │
+submitFineMap.sh       (submits)   STAGE 3: fine map on top of the slot's FastTransform (hours/slot)
+                                     └─ per-slot payload: fineMapJob.sh
 ```
 
 Stage 1 and stage 2 are **independent GRID submissions**, not one script. If some stage-1 slots fail
@@ -516,6 +533,77 @@ file names. `fill` is looked up in `GLO/Config/GRPLHCIF` at `tsStart`; it is `-1
 failed.
 
 Both files are non-fatal: if writing or staging one fails, the slot still succeeds.
+
+### Step 5 — optional stage 3: fine map (`submitFineMap.sh` / `fineMapJob.sh`)
+
+For every slot, `fineMapCreatorGBL.C` fits each ITS-TPC track of the slot's TPC clusters (GBL fit, the ITS
+track only as seed) after correcting the clusters with **that slot's stage-2 FastTransform**, and maps the
+unbiased residuals per voxel: what the coarse map leaves, on the same voxel grid. It uses the same files and
+the same TFs as the coarse map: the manifest's window bounds become the macro's `firstTFTime`/`lastTFTime`,
+the cut `staticMapCreatorCPM.C` applies. So every coarse map gets its fine map, and the two can later be
+combined into one map for the CCDB (not part of this pipeline yet).
+
+Stage 3 reuses stage 1's manifest (not rebuilt) and finds each slot's FastTransform through stage 2's
+`stage2Workdir.<JOBNAME>.txt` pointer, the same way stage 2 finds stage 1's maps:
+
+```
+<stage-2 workdir>/<N zero-padded>/FT_voxRes.<run>_<firstTS>_<lastTS>.TD<w>of<W>.it0.GausSmooth.Extrapolation.root
+```
+
+Edit the config block at the top of **`submitFineMap.sh`**:
+
+| Variable | Meaning |
+|---|---|
+| `JOBNAME` | This stage's own job name, unique per submission. Tags `stage3Workdir.<JOBNAME>.txt`. |
+| `STAGE1_JOBNAME_TAG` | The `JOBNAME` stage 1 was submitted with: the slot manifest. |
+| `STAGE2_JOBNAME_TAG` | The `JOBNAME` stage 2 was submitted with: where the FastTransforms are. Must have post-processed that stage 1. |
+| `TOPWORKDIR`, `PACKAGESPEC`, `ASUSER` | As for stages 1 and 2. `PACKAGESPEC` needs an O2 build with `fineMapCreatorGBL.C` for `MACRO_SOURCE=official`. |
+| `MACRO_SOURCE` / `MACRO_LOCAL_PATH` | See "Where the macros come from" above. |
+
+Physics/processing parameters live in **`fineMapJob.sh`**:
+
+| Variable | Meaning |
+|---|---|
+| `Y2XBINNING`, `Z2XBINNING`, `MAX_Z2X` | Voxel grid of the fine map (default: stage 1's 20 × 28 up to z/x 1.4). |
+| `TRACK_SOURCES` | Track types used (default: all ITS-TPC combinations). |
+| `MIN_ENTRIES` | Residuals for a voxel to be solved. |
+| `N_THREADS` | Fit threads — match the JDL's `multicore_8`. |
+| `STAGE2_MAP_SUFFIX` | Suffix of stage 2's FastTransform name; must match `postProcessJob.sh`'s `DO_GAUS_SMOOTH` / `DO_EXTRAPOLATION`. |
+| `DERIVATIVE_MAP` | `""` (default): the slot's coarse map as is, every slot independent, no IDC needed. `"ccdb"`: in addition `TPC/Calib/CorrectionMapDerivativeV2`, scaled per TF with its IDC. |
+| `ENTRIES_PER_FILE` | `-1` (default): every TF of the window. A small number for a quick local test. |
+
+Then:
+
+```bash
+./submitFineMap.sh
+```
+
+Output, in this stage's own `${ALIEN_JDL_OUTPUTDIR}` (its own directory tree, pointer
+`stage3Workdir.<JOBNAME>.txt` in `MACRO_ALIEN_DIR`):
+
+```
+<stage-3 workdir>/<N zero-padded>/
+    voxRes.<run>_<firstTS>_<lastTS>.TD<w>of<W>.it0.fine.root   voxResTree (fine map) + OrbitLumiInfo
+    voxRes.<run>_<firstTS>_<lastTS>.TD<w>of<W>.it0.fine.txt    mean / median IDC and CTP of the slot
+    baseMapSource.txt                                         the FastTransform it was built on
+```
+
+Things to know:
+
+- **CPU.** The fine map uses every track of the window: about 40 CPU-s per PbPb TF, far more than stage 1
+  with its track cap. `SLOT_LENGTH_MIN` of stage 1 therefore sets the CPU time of a stage-3 subjob too;
+  check the first subjobs against the TTL (`grid_submit.sh` default 82000 s).
+- **Missing FastTransform** (stage 1 marked the slot `badCalib_`, or stage 1 / 2 failed or are still
+  running): the subjob logs it and exits 0, like stage 2. Resubmit it once stage 2 has produced the map.
+- **GBL and Eigen.** The macro compiles against GBL and Eigen, which the O2 environment does not put on
+  ROOT's paths; `fineMapJob.sh` finds them (`GBL_ROOT` / `EIGEN3_ROOT`, else `$BASEDIR` and the loaded GBL
+  module) and fails with a clear message if it cannot.
+
+**Local single-slot test** (placeholders set by hand, a few TFs per file):
+
+```bash
+SUBJOBID=1 ENTRIES_PER_FILE=2 ./fineMapJob.sh
+```
 
 Stage 1's and stage 2's output for the same slot are *not* grouped under one tidy parent directory —
 that's the direct cost of letting the JDL own output placement instead of managing it ourselves (see
