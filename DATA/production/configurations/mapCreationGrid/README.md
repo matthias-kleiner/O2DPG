@@ -559,6 +559,7 @@ Edit the config block at the top of **`submitFineMap.sh`**:
 | `STAGE2_JOBNAME_TAG` | The `JOBNAME` stage 2 was submitted with: where the FastTransforms are. Must have post-processed that stage 1. |
 | `TOPWORKDIR`, `PACKAGESPEC`, `ASUSER` | As for stages 1 and 2. `PACKAGESPEC` needs an O2 build with `fineMapCreatorGBL.C` for `MACRO_SOURCE=official`. |
 | `MACRO_SOURCE` / `MACRO_LOCAL_PATH` | See "Where the macros come from" above. |
+| `MAX_SLOTS` | `0` (default): every slot of the manifest. `N > 0`: only the first `N` slots, e.g. for a first test; subjob `i` is still slot `i`. |
 
 Physics/processing parameters live in **`fineMapJob.sh`**:
 

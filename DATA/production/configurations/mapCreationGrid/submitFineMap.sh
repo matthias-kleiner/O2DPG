@@ -30,6 +30,7 @@ ASUSER="pwg_pp"                             # as stages 1 and 2
 MACRO_SOURCE="official"                     # "official": ${O2_ROOT}/share/macro/fineMapCreatorGBL.C from PACKAGESPEC;
                                             # "alien": MACRO_LOCAL_PATH is staged to MACRO_ALIEN_DIR and the jobs use that copy
 MACRO_LOCAL_PATH=""                         # only used when MACRO_SOURCE=alien: local path to fineMapCreatorGBL.C
+MAX_SLOTS=0                                 # 0: every slot of the manifest; N > 0: only the first N slots (e.g. a first test)
 
 ALIEN_USER_NAME="${ALIEN_USER:-$(whoami)}"
 MACRO_ALIEN_DIR_BARE="${MAPCREATION_ALIEN_DIR:-/alice/cern.ch/user/${ALIEN_USER_NAME:0:1}/${ALIEN_USER_NAME}/MapCreation}"
@@ -60,6 +61,12 @@ echo "N=${N} slot(s)"
 # stage 2's subjob directories are zero-padded to this width (same N, same formula as submitPostProcess.sh)
 COUNTERWIDTH=${#N}
 [[ "${COUNTERWIDTH}" -lt 3 ]] && COUNTERWIDTH=3
+# only the first MAX_SLOTS slots: subjob i is still manifest line i (and stage 2's subjob i)
+NSUBMIT=${N}
+if [[ "${MAX_SLOTS}" -gt 0 && "${MAX_SLOTS}" -lt "${N}" ]]; then
+  NSUBMIT=${MAX_SLOTS}
+  echo "== MAX_SLOTS=${MAX_SLOTS}: submitting only the first ${NSUBMIT} of ${N} slots =="
+fi
 
 # where stage 2 staged the FastTransforms
 STAGE2_POINTER_NAME="stage2Workdir.${STAGE2_JOBNAME_TAG}.txt"
@@ -88,11 +95,11 @@ GRID_SUBMIT_ARGS=(
   --script "${TMP_SCRIPT}"
   --jobname "${JOBNAME}"
   --topworkdir "${TOPWORKDIR}"
-  --prodsplit "${N}"
+  --prodsplit "${NSUBMIT}"
   --packagespec "${PACKAGESPEC}"
   --asuser "${ASUSER}"
 )
-echo "== Submitting ${JOBNAME} (prodsplit=${N}, asuser=${ASUSER}) =="
+echo "== Submitting ${JOBNAME} (prodsplit=${NSUBMIT}, asuser=${ASUSER}) =="
 SUBMIT_LOG=$("${O2DPG_ROOT}/GRID/utils/grid_submit.sh" "${GRID_SUBMIT_ARGS[@]}" 2>&1 | tee /dev/stderr)
 MY_JOBWORKDIR=$(echo "${SUBMIT_LOG}" | sed -E 's/\x1b\[[0-9;]*m//g' | sed -n "s/^Your job's working directory will be //p" | tail -1)
 if [[ -z "${MY_JOBWORKDIR}" ]]; then
