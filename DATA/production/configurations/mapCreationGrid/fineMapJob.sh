@@ -112,7 +112,7 @@ Z2XBINNING="28"
 MAX_Z2X=1.4
 TRACK_SOURCES="ITS-TPC,ITS-TPC-TRD,ITS-TPC-TOF,ITS-TPC-TRD-TOF"
 MIN_ENTRIES=15                      # residuals for a voxel to be solved
-N_THREADS=8                         # fit threads: match the JDL's multicore_8 allocation
+N_THREADS=${ALIEN_JDL_CPUCORES:-8}  # fit threads = the cores of the job (the JDL's CPUCores; 8 on multicore_8)
 STAGE2_MAP_SUFFIX=".GausSmooth.Extrapolation"   # stage 2's FT name suffix: must match postProcessJob.sh's DO_GAUS_SMOOTH / DO_EXTRAPOLATION
 DERIVATIVE_MAP=""                   # "": the slot's coarse map as is (each slot independent, no IDC needed); "ccdb": in addition
                                     # TPC/Calib/CorrectionMapDerivativeV2, scaled per TF with the IDC (needs IDC in both maps)

@@ -31,6 +31,8 @@ MACRO_SOURCE="official"                     # "official": ${O2_ROOT}/share/macro
                                             # "alien": MACRO_LOCAL_PATH is staged to MACRO_ALIEN_DIR and the jobs use that copy
 MACRO_LOCAL_PATH=""                         # only used when MACRO_SOURCE=alien: local path to fineMapCreatorGBL.C
 MAX_SLOTS=0                                 # 0: every slot of the manifest; N > 0: only the first N slots (e.g. a first test)
+CPU_CORES=8                                 # cores per subjob (fineMapJob.sh runs as many fit threads); > 8 needs slots that size
+GRID_PARTITION=""                           # "": grid_submit.sh's default (multicore_8)
 
 ALIEN_USER_NAME="${ALIEN_USER:-$(whoami)}"
 MACRO_ALIEN_DIR_BARE="${MAPCREATION_ALIEN_DIR:-/alice/cern.ch/user/${ALIEN_USER_NAME:0:1}/${ALIEN_USER_NAME}/MapCreation}"
@@ -98,7 +100,9 @@ GRID_SUBMIT_ARGS=(
   --prodsplit "${NSUBMIT}"
   --packagespec "${PACKAGESPEC}"
   --asuser "${ASUSER}"
+  --cores "${CPU_CORES}"
 )
+[[ -n "${GRID_PARTITION}" ]] && GRID_SUBMIT_ARGS+=(--partition "${GRID_PARTITION}")
 echo "== Submitting ${JOBNAME} (prodsplit=${NSUBMIT}, asuser=${ASUSER}) =="
 SUBMIT_LOG=$("${O2DPG_ROOT}/GRID/utils/grid_submit.sh" "${GRID_SUBMIT_ARGS[@]}" 2>&1 | tee /dev/stderr)
 MY_JOBWORKDIR=$(echo "${SUBMIT_LOG}" | sed -E 's/\x1b\[[0-9;]*m//g' | sed -n "s/^Your job's working directory will be //p" | tail -1)
