@@ -59,12 +59,17 @@ TOPWORKDIR="MapCreation"
 PACKAGESPEC="O2::daily-20260730-0000-1"
 ASUSER="pwg_pp"        # see the long comment above -- your own account for personal quota, "pwg_pp" for group
                        # quota (this stage's own submission; independent of what stage 1 used).
+SMOOTHER="SmoothingExtrapolate" # smoothing + small-radius extrapolation of the stage-1 map:
+                       # "SmoothingExtrapolate" (SmoothingExtrapolate.C, Gaussian smoothing + per-column pol2
+                       # extrapolation, single-threaded, 1 core) or "smoothVoxelMap" (smoothVoxelMap.C,
+                       # penalised fit of the whole map, multi-threaded, 8 cores). Its parameters live in
+                       # postProcessJob.sh.
 MACRO_SOURCE="official" # same meaning/default as stage 1 (submitMapCreation.sh) -- applies
                        # to all three macros used here.
 MACRO_LOCAL_DIR=""     # only used when MACRO_SOURCE=alien: local directory containing
-                       # SmoothingExtrapolate.C, TPCFastTransformInitCPM.C, voxResQA.C to upload, e.g.
+                       # ${SMOOTHER}.C, TPCFastTransformInitCPM.C, voxResQA.C to upload, e.g.
                        # your O2 checkout's Detectors/TPC/calibration/SpacePoints/macro/ +
-                       # GPU/TPCFastTransformation/macro/ (voxResQA.C and SmoothingExtrapolate.C live in
+                       # GPU/TPCFastTransformation/macro/ (voxResQA.C and the smoothing macros live in
                        # the former, TPCFastTransformInitCPM.C in the latter -- symlink/copy them into one
                        # local dir first if they're not already colocated).
                        # Same staging root as stage 1, derived the same way (see that script's comment):
@@ -79,10 +84,18 @@ MACRO_ALIEN_DIR="alien://${MACRO_ALIEN_DIR_BARE}"
 echo "== Staging area (must match stage 1's): ${MACRO_ALIEN_DIR_BARE} =="
 echo "   (derived from AliEn user '${ALIEN_USER_NAME}' -- export ALIEN_USER or MAPCREATION_ALIEN_DIR if that is wrong)"
 
+# The smoothing macro's threads = the subjob's cores (the JDL already requires a multicore_8 partition).
+case "${SMOOTHER}" in
+  SmoothingExtrapolate) CPU_CORES=1 ;; # single-threaded macros only; grid_submit.sh's 8-core default trips the JobAgent CPU monitor
+  smoothVoxelMap) CPU_CORES=8 ;;
+  *) echo "ERROR: SMOOTHER must be SmoothingExtrapolate or smoothVoxelMap (got '${SMOOTHER}')" >&2; exit 1 ;;
+esac
+echo "== Smoothing with ${SMOOTHER}.C, ${CPU_CORES} core(s) per subjob =="
+
 if [[ "${MACRO_SOURCE}" == "alien" ]]; then
-  [[ -n "${MACRO_LOCAL_DIR}" && -f "${MACRO_LOCAL_DIR}/SmoothingExtrapolate.C" && -f "${MACRO_LOCAL_DIR}/TPCFastTransformInitCPM.C" && -f "${MACRO_LOCAL_DIR}/voxResQA.C" ]] || { echo "ERROR: MACRO_SOURCE=alien needs MACRO_LOCAL_DIR set to a directory containing all three macros (got '${MACRO_LOCAL_DIR}')" >&2; exit 1; }
-  echo "== Re-staging SmoothingExtrapolate.C / TPCFastTransformInitCPM.C / voxResQA.C from ${MACRO_LOCAL_DIR} to ${MACRO_ALIEN_DIR} =="
-  alien.py cp -f "file:${MACRO_LOCAL_DIR}/SmoothingExtrapolate.C" "${MACRO_ALIEN_DIR}/SmoothingExtrapolate.C"
+  [[ -n "${MACRO_LOCAL_DIR}" && -f "${MACRO_LOCAL_DIR}/${SMOOTHER}.C" && -f "${MACRO_LOCAL_DIR}/TPCFastTransformInitCPM.C" && -f "${MACRO_LOCAL_DIR}/voxResQA.C" ]] || { echo "ERROR: MACRO_SOURCE=alien needs MACRO_LOCAL_DIR set to a directory containing all three macros (got '${MACRO_LOCAL_DIR}')" >&2; exit 1; }
+  echo "== Re-staging ${SMOOTHER}.C / TPCFastTransformInitCPM.C / voxResQA.C from ${MACRO_LOCAL_DIR} to ${MACRO_ALIEN_DIR} =="
+  alien.py cp -f "file:${MACRO_LOCAL_DIR}/${SMOOTHER}.C" "${MACRO_ALIEN_DIR}/${SMOOTHER}.C"
   alien.py cp -f "file:${MACRO_LOCAL_DIR}/TPCFastTransformInitCPM.C" "${MACRO_ALIEN_DIR}/TPCFastTransformInitCPM.C"
   alien.py cp -f "file:${MACRO_LOCAL_DIR}/voxResQA.C" "${MACRO_ALIEN_DIR}/voxResQA.C"
 else
@@ -135,6 +148,8 @@ echo "== STAGE1_OUTPUTDIR_BASE = ${STAGE1_OUTPUTDIR_BASE} =="
 sed \
   -e "s/^STAGE1_JOBNAME_TAG=.*/STAGE1_JOBNAME_TAG=${STAGE1_JOBNAME_TAG}/" \
   -e "s/^MACRO_SOURCE=.*/MACRO_SOURCE=${MACRO_SOURCE}/" \
+  -e "s/^SMOOTHER=.*/SMOOTHER=${SMOOTHER}/" \
+  -e "s/^SMOOTH_NTHREADS=.*/SMOOTH_NTHREADS=${CPU_CORES}/" \
   -e "s|^MACRO_ALIEN_DIR_BARE=.*|MACRO_ALIEN_DIR_BARE=${MACRO_ALIEN_DIR_BARE}|" \
   -e "s|^STAGE1_OUTPUTDIR_BASE=.*|STAGE1_OUTPUTDIR_BASE=${STAGE1_OUTPUTDIR_BASE}|" \
   -e "s/^COUNTERWIDTH=.*/COUNTERWIDTH=${COUNTERWIDTH}/" \
@@ -145,7 +160,7 @@ GRID_SUBMIT_ARGS=(
   --jobname "${JOBNAME}"
   --topworkdir "${TOPWORKDIR}"
   --prodsplit "${N}"
-  --cores 1              # smoothing/QA/FastTransform macros are single-threaded; grid_submit.sh's 8-core default trips the JobAgent CPU monitor
+  --cores "${CPU_CORES}" # per SMOOTHER, see above
   --packagespec "${PACKAGESPEC}"
   --asuser "${ASUSER}"
 )

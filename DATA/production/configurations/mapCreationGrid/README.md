@@ -464,6 +464,7 @@ Edit the config block at the top of **`submitPostProcess.sh`**:
 | `TOPWORKDIR` | Same meaning as stage 1's. Independent value — stage 2 is its own GRID submission with its own working directory, not nested under stage 1's. |
 | `PACKAGESPEC` | Same meaning as stage 1; keep in sync. Also determines whether `MACRO_SOURCE=official` can find the macros. |
 | `ASUSER` | Same meaning as stage 1's — independent of what stage 1 used (stage 2's own submission). |
+| `SMOOTHER` | Smoothing + small-radius extrapolation of the stage-1 map: `SmoothingExtrapolate` (default: `SmoothingExtrapolate.C`, Gaussian smoothing + per-column pol2 extrapolation, 1 core per subjob) or `smoothVoxelMap` (`smoothVoxelMap.C`, penalised fit of the whole map, 8 cores and 8 threads per subjob). With `smoothVoxelMap` the outputs are named `*.PenalisedFit.root` instead of `*.GausSmooth.Extrapolation.root` (set stage 3's `STAGE2_MAP_SUFFIX` accordingly). |
 | `MACRO_SOURCE` / `MACRO_LOCAL_DIR` | See "Where the macros come from" above (this stage uploads all three macros at once when `MACRO_SOURCE=alien`, via `MACRO_LOCAL_DIR` rather than a single-file path). |
 
 **Physics/processing parameters**, same as stage 1, live in the payload script
@@ -472,13 +473,14 @@ Edit the config block at the top of **`submitPostProcess.sh`**:
 | Variable | Meaning |
 |---|---|
 | `USE_SMOOTHED` | Should match stage 1's `USE_SMOOTHED` — selects `DO_GAUS_SMOOTH` below. |
-| `DO_GAUS_SMOOTH` | Whether `SmoothingExtrapolate.C` applies Gaussian smoothing. |
+| `DO_GAUS_SMOOTH` | Whether `SmoothingExtrapolate.C` applies Gaussian smoothing (`DO_GAUS_SMOOTH` … `MASK_IA11`: only with `SMOOTHER=SmoothingExtrapolate`). |
 | `DO_EXTRAPOLATION` | `2` = extrapolate both smoothed and raw values. |
 | `A11_MAX_Z2X` | `-1` = disabled. |
 | `MASK_IA11` | `0` = disabled. |
+| `SVM_*` | `smoothVoxelMap.C` arguments (only with `SMOOTHER=smoothVoxelMap`; defaults = the macro's): curvature priors `SVM_TAU_ROW` / `SVM_TAU_Y2X` / `SVM_TAU_Z2X` (µm/cm²), ridge `SVM_TAU0`, `SVM_TRUST_FRACTION`, `SVM_MIN_ENTRIES`, `SVM_ERROR_MODE`, `SVM_JOIN_IDCS`, `SVM_ROBUST`. The threads follow the subjob's cores. |
 | `USE_CTP_LUMI` | Selects `TPCFastTransformInitCPM.C`'s luminosity source. `2` = CTP (matches stage 1's macro not accessing IDC scalers directly at all -- see the note at the end of Step 2). |
 | `QA_DRAW_ERRORS` | `voxResQA.C` option — draw error bars. |
-| `QA_USE_SMOOTHED` | `voxResQA.C` option — `true` draws the smoothed dXS/dYS/dZS (needs `SmoothingExtrapolate.C`'s output, which is exactly what it runs on); `false` draws raw dX/dY/dZ instead. |
+| `QA_USE_SMOOTHED` | `voxResQA.C` option — `true` draws the smoothed dXS/dYS/dZS (needs the smoothing macro's output, which is exactly what it runs on); `false` draws raw dX/dY/dZ instead. |
 | `QA_Z2X_BIN_SEL` | `voxResQA.C` option — `-1` = all z2x bins. |
 
 **QA plots**: stage 2 also runs `voxResQA.C` on each slot's smoothed map, producing
@@ -580,7 +582,7 @@ Physics/processing parameters live in **`fineMapJob.sh`**:
 | `TRACK_SOURCES` | Track types used (default: all ITS-TPC combinations). |
 | `MIN_ENTRIES` | Residuals for a voxel to be solved. |
 | `N_THREADS` | Fit threads — match the JDL's `multicore_8`. |
-| `STAGE2_MAP_SUFFIX` | Suffix of stage 2's FastTransform name; must match `postProcessJob.sh`'s `DO_GAUS_SMOOTH` / `DO_EXTRAPOLATION`. |
+| `STAGE2_MAP_SUFFIX` | Suffix of stage 2's FastTransform name; must match `postProcessJob.sh`'s `DO_GAUS_SMOOTH` / `DO_EXTRAPOLATION` (`.PenalisedFit` with `SMOOTHER=smoothVoxelMap`). |
 | `DERIVATIVE_MAP` | `""` (default): the slot's coarse map as is, every slot independent, no IDC needed. `"ccdb"`: in addition `TPC/Calib/CorrectionMapDerivativeV2`, scaled per TF with its IDC. |
 | `ENTRIES_PER_FILE` | `-1` (default): every TF of the window. A small number for a quick local test. |
 

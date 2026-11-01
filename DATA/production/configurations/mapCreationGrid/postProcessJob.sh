@@ -2,7 +2,7 @@
 # postProcessJob.sh — STAGE 2 of the two-stage pipeline.
 #
 # Runs the fast (minutes, not hours) part of the chain on an already-produced map:
-#   SmoothingExtrapolate.C  ->  TPCFastTransformInitCPM.C
+#   SmoothingExtrapolate.C or smoothVoxelMap.C (SMOOTHER)  ->  TPCFastTransformInitCPM.C
 #
 # Independent of stage 1 (mapCreationJob.sh): does NOT re-run map creation, does NOT even download the
 # (multi-GB) residual files. It only needs the small manifest (mapSlots.tsv, reused as-is from stage 1,
@@ -33,16 +33,21 @@
 # in-job breadcrumb from stage 1 or an extra AliEn round trip.
 #
 # MACRO_SOURCE: same meaning and default ("official") as stage 1 -- see mapCreationJob.sh. Applies
-# to all three macros used here (SmoothingExtrapolate.C, TPCFastTransformInitCPM.C, voxResQA.C), all
+# to all three macros used here (${SMOOTHER}.C, TPCFastTransformInitCPM.C, voxResQA.C), all
 # installed to the same $O2_ROOT/share/macro/ once the O2 PR is merged into this job's packagespec.
 #
 # MACRO_ALIEN_DIR_BARE: same placeholder mechanism, substituted from the wrapper's own
 # MACRO_ALIEN_DIR_BARE -- must match stage 1's. Used for the manifest/stage1Workdir pointer regardless of
 # MACRO_SOURCE; only used for the macros themselves when MACRO_SOURCE=alien.
+#
+# SMOOTHER / SMOOTH_NTHREADS: substituted from the wrapper -- the smoothing macro (SmoothingExtrapolate or
+# smoothVoxelMap, see submitPostProcess.sh) and its threads (= the subjob's cores).
 STAGE1_JOBNAME_TAG=default
 STAGE1_OUTPUTDIR_BASE=
 COUNTERWIDTH=3
 MACRO_SOURCE=official
+SMOOTHER=SmoothingExtrapolate
+SMOOTH_NTHREADS=1
 MACRO_ALIEN_DIR_BARE=${MACRO_ALIEN_DIR_BARE:-}
 #JDL_OUTPUT=*.log@disk=2,*.txt@disk=2,*.png@disk=2
 #JDL_REQUIRE={member(other.GridPartitions,"multicore_8") && (other.CE != "ALICE::NIHAM::PBS64") && (other.CE != "ALICE::KISTI_GSDC::LCG") && (other.CE != "ALICE::SaoPaulo::LCG")};
@@ -75,9 +80,14 @@ export XRD_STREAMERRORWINDOW=0
 : "${MACRO_ALIEN_DIR_BARE:?MACRO_ALIEN_DIR_BARE is empty -- the submission wrapper normally substitutes it. For a standalone/local run, export it first, e.g. MACRO_ALIEN_DIR_BARE=/alice/cern.ch/user/<initial>/<user>/MapCreation}"
 MACRO_ALIEN_DIR="alien://${MACRO_ALIEN_DIR_BARE}"
 
+if [[ "${SMOOTHER}" != "SmoothingExtrapolate" && "${SMOOTHER}" != "smoothVoxelMap" ]]; then
+  echo "ERROR: SMOOTHER must be SmoothingExtrapolate or smoothVoxelMap (got '${SMOOTHER}')" >&2
+  exit 1
+fi
+
 if [[ "${MACRO_SOURCE}" == "official" ]]; then
   : "${O2_ROOT:?O2_ROOT is not set -- MACRO_SOURCE=official needs the O2 package loaded via --packagespec}"
-  SMOOTHING_MACRO_PATH="${O2_ROOT}/share/macro/SmoothingExtrapolate.C"
+  SMOOTHING_MACRO_PATH="${O2_ROOT}/share/macro/${SMOOTHER}.C"
   FASTTRANSFORM_MACRO_PATH="${O2_ROOT}/share/macro/TPCFastTransformInitCPM.C"
   QA_MACRO_PATH="${O2_ROOT}/share/macro/voxResQA.C"
   for f in "${SMOOTHING_MACRO_PATH}" "${FASTTRANSFORM_MACRO_PATH}" "${QA_MACRO_PATH}"; do
@@ -87,10 +97,10 @@ if [[ "${MACRO_SOURCE}" == "official" ]]; then
     fi
   done
 else
-  alien.py cp -f "${MACRO_ALIEN_DIR}/SmoothingExtrapolate.C" file:./SmoothingExtrapolate.C
+  alien.py cp -f "${MACRO_ALIEN_DIR}/${SMOOTHER}.C" "file:./${SMOOTHER}.C"
   alien.py cp -f "${MACRO_ALIEN_DIR}/TPCFastTransformInitCPM.C" file:./TPCFastTransformInitCPM.C
   alien.py cp -f "${MACRO_ALIEN_DIR}/voxResQA.C" file:./voxResQA.C
-  SMOOTHING_MACRO_PATH="./SmoothingExtrapolate.C"
+  SMOOTHING_MACRO_PATH="./${SMOOTHER}.C"
   FASTTRANSFORM_MACRO_PATH="./TPCFastTransformInitCPM.C"
   QA_MACRO_PATH="./voxResQA.C"
 fi
@@ -126,16 +136,27 @@ echo "Slot ${SUBJOBID}: run ${RUN}, window ${WIN_IDX}/${WIN_COUNT} [${firstTSIte
 
 # --- Config (production defaults) ---
 USE_SMOOTHED=2                      # matches stage 1's USE_SMOOTHED -- selects doGausSmooth=true below
+# SMOOTHER=SmoothingExtrapolate:
 DO_GAUS_SMOOTH=true
 DO_EXTRAPOLATION=2                  # smoothed AND raw values extrapolated
 A11_MAX_Z2X=-1                      # disabled
 MASK_IA11=0                         # disabled
+# SMOOTHER=smoothVoxelMap (the macro's defaults; see its argument list):
+SVM_TAU_ROW=1000                    # prior rms of the curvature (um / cm^2) along the pad rows
+SVM_TAU_Y2X=2000                    # ... along y/x
+SVM_TAU_Z2X=1000                    # ... along z/x
+SVM_TAU0=0                          # ridge towards 0 (um), 0: none
+SVM_TRUST_FRACTION=-1               # innermost IROC rows below this fraction of the plateau entries = no data; -1: auto
+SVM_MIN_ENTRIES=20                  # voxels with fewer entries are no data
+SVM_ERROR_MODE=-1                   # -1: auto
+SVM_JOIN_IDCS=-1                    # meanIDC / medianIDC from the CCDB if the input has none
+SVM_ROBUST=0                        # Tukey reweighting cycles
 USE_CTP_LUMI=2                      # matches stage 1's USE_CTP_LUMI
 
-# voxResQA.C config -- needs SmoothingExtrapolate.C's DS[] (smoothed dX/dY/dZ) already filled in,
+# voxResQA.C config -- needs the smoothing macro's DS[] (smoothed dX/dY/dZ) already filled in,
 # hence run from here, on OUTPUT_MAP_SMOOTH, not the raw stage-1 map.
 QA_DRAW_ERRORS=false
-QA_USE_SMOOTHED=true                # true: draw dXS/dYS/dZS (needs SmoothingExtrapolate.C's output); false: raw dX/dY/dZ
+QA_USE_SMOOTHED=true                # true: draw dXS/dYS/dZS (needs the smoothing macro's output); false: raw dX/dY/dZ
 QA_Z2X_BIN_SEL=-1                   # -1: all z2x bins
 
 # --- Expected stage-1 output filename (must match mapCreationJob.sh's OUTPUT_STEM exactly) ---
@@ -171,18 +192,22 @@ if ! alien.py cp -f "${STAGE1_OUTPUT_LOCATION}/${STAGE1_OUTPUT_FILE}" "file:${IN
   exit 0
 fi
 
-# --- [1/2] Gaussian smoothing + extrapolation ---
+# --- [1/2] smoothing + extrapolation ---
 GAUSSMOOTH_ADD=""
-[[ "${DO_GAUS_SMOOTH}" == "true" ]] && GAUSSMOOTH_ADD+=".GausSmooth"
-[[ "${DO_EXTRAPOLATION}" -gt 0 ]] && GAUSSMOOTH_ADD+=".Extrapolation"
+if [[ "${SMOOTHER}" == "smoothVoxelMap" ]]; then
+  GAUSSMOOTH_ADD=".PenalisedFit"
+  cmd="(time root.exe -b -q -l -x '${SMOOTHING_MACRO_PATH}+Og(\"${INPUT_MAP}\", \"${OUTPUT_STEM}${GAUSSMOOTH_ADD}.root\", ${SVM_TAU_ROW}, ${SVM_TAU_Y2X}, ${SVM_TAU_Z2X}, ${SVM_TAU0}, ${SVM_TRUST_FRACTION}, ${SVM_MIN_ENTRIES}, ${SVM_ERROR_MODE}, ${SVM_JOIN_IDCS}, ${SVM_ROBUST}, ${SMOOTH_NTHREADS})')"
+else
+  [[ "${DO_GAUS_SMOOTH}" == "true" ]] && GAUSSMOOTH_ADD+=".GausSmooth"
+  [[ "${DO_EXTRAPOLATION}" -gt 0 ]] && GAUSSMOOTH_ADD+=".Extrapolation"
+  cmd="(time root.exe -b -q -l -x '${SMOOTHING_MACRO_PATH}+Og(\"${INPUT_MAP}\", \"${OUTPUT_STEM}${GAUSSMOOTH_ADD}.root\", ${DO_GAUS_SMOOTH}, ${DO_EXTRAPOLATION}, ${A11_MAX_Z2X}, ${MASK_IA11})')"
+fi
 OUTPUT_MAP_SMOOTH="${OUTPUT_STEM}${GAUSSMOOTH_ADD}.root"
-
-cmd="(time root.exe -b -q -l -x '${SMOOTHING_MACRO_PATH}+Og(\"${INPUT_MAP}\", \"${OUTPUT_MAP_SMOOTH}\", ${DO_GAUS_SMOOTH}, ${DO_EXTRAPOLATION}, ${A11_MAX_Z2X}, ${MASK_IA11})')"
 echo "$(date) ${cmd}"
 eval "${cmd}"
 
 if [[ ! -s "${OUTPUT_MAP_SMOOTH}" ]]; then
-  echo "ERROR: ${OUTPUT_MAP_SMOOTH} was not produced -- SmoothingExtrapolate.C failed" >&2
+  echo "ERROR: ${OUTPUT_MAP_SMOOTH} was not produced -- ${SMOOTHER}.C failed" >&2
   exit 1
 fi
 
@@ -268,7 +293,7 @@ echo "Staged ${OUTPUT_FT} to ${ALIEN_OUTPUT_DIR}"
 
 # --- Per-slot metadata (mapMeta.txt): one key=value per line, for downstream bookkeeping without opening
 # any ROOT file. Rates are read from the SMOOTHED map's UserInfo (the stage-1 map still carries the
-# meanIDC/medianIDC=0 placeholders; SmoothingExtrapolate.C joins in the real values), timestamps are the
+# meanIDC/medianIDC=0 placeholders; the smoothing macro joins in the real values), timestamps are the
 # manifest window (same values as in the file names), fill number from GLO/Config/GRPLHCIF at the window
 # start. Written after the FT is staged, so a mapMeta.txt never points at an FT that doesn't exist.
 # Generated inline rather than shipped as a separate .C: grid_submit.sh only ships this one script.
