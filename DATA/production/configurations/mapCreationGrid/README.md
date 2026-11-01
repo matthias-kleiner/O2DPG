@@ -38,8 +38,9 @@ left as-is.
    ./discoverResiduals.sh batch_mc.txt --mc
    ```
 
-   This searches `/alice/sim/<year>/<prodTag>/0/<run>/` (`--mc-cycle <n>` for a production cycle other
-   than `0`). In step 2, also set `MC_MODE=true` and `BAD_RANGES_NAME=""`. Details: "MC productions" in
+   This searches `/alice/sim/<year>/<prodTag>/0/<run>/ResidualTPCmerging/Stage_0/` for the production's
+   merged residuals, falling back to the per-job files under `/alice/sim/<year>/<prodTag>/0/<run>/` with
+   a warning when there are none (`--mc-cycle <n>` for a production cycle other than `0`). In step 2, also set `MC_MODE=true` and `BAD_RANGES_NAME=""`. Details: "MC productions" in
    "The chain, in order" below.
 
 2. **Submit stage 1 (map creation).** In `submitMapCreation.sh`, set:
@@ -307,6 +308,16 @@ EOF
 
 The year is taken from the tag (`LHC26…` → 2026). `--calib-pass` is rejected with `--mc`, since the MC
 path has no such level.
+
+The production also merges the per-job files, about 150 jobs into one
+`<anchorRun>/ResidualTPCmerging/Stage_0/<NNN>/o2tpc_residuals.root` (same trees, ~15 GB). When any
+merged file exists, the run's list holds **only** the merged files. A search over the whole run
+directory would list every residual twice, once per-job and once merged, and each `alien://` open costs
+~7 s in stage 1, so a few dozen merged files beat thousands of per-job ones. A `Stage_0/<NNN>/` without
+the file is a merge job that failed or is still running: its share of the statistics is missing,
+and discovery prints a `WARNING: only <n>/<m> merge jobs produced o2tpc_residuals.root` for that run.
+Wait for the merging, or accept the smaller sample. A run with no merged file at all falls back to the
+per-job files, with a warning.
 
 MC file names carry no `<firstTS>_<lastTS>` label, so there is nothing to cut windows from:
 `makeResidualLists.sh` writes one list per run (`residuals.all.<run>.txt`), and Step 2 needs

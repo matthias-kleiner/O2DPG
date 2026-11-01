@@ -14,7 +14,8 @@
 # --mc: the batch file lists MC productions instead of data periods. Field 1 is then the MC production
 # tag and field 2 the anchor run, e.g. "LHC26j19_residuals 568336", and the search path becomes
 # /alice/sim/<YEAR>/<prodTag>/<cycle>/<RUN>/ (cycle = --mc-cycle, default 0) instead of
-# /alice/data/<YEAR>/<PERIOD>/<RUN>/<calib-pass>/. MC residual files carry no time label in their
+# /alice/data/<YEAR>/<PERIOD>/<RUN>/<calib-pass>/ -- or rather its ResidualTPCmerging/Stage_0/ subdir,
+# the production's merged residuals, whenever that holds any (see per_run). MC residual files carry no time label in their
 # names, so makeResidualLists.sh writes them as one timeless list per run; submit those with
 # MC_MODE=true in submitMapCreation.sh (stageSlotsForGrid.py --mc).
 #
@@ -195,6 +196,31 @@ per_run() {
     echo "========================================"
     echo "Processing run ${RUN} (period ${PERIOD}, year ${YEAR})"
     echo "========================================"
+
+    # MC productions merge their per-job residuals into ResidualTPCmerging/Stage_0/<NNN>/o2tpc_residuals.root
+    # (~150 jobs per file, same trees). Read those when present: the recursive search over the run dir
+    # would otherwise list every residual twice (per-job + merged), and each alien:// open costs ~7 s,
+    # so ~40 merged files instead of thousands of per-job ones. A merge job that failed or is still
+    # running leaves its Stage_0/<NNN>/ without the file, and its share of the statistics is then
+    # missing -- warned about, not fatal. Without any merged file, fall back to the per-job files (the
+    # recursive search then cannot pick up merged ones, there are none).
+    if (( MC_MODE )); then
+        local MERGED_PATH="${ALIEN_PATH}ResidualTPCmerging/Stage_0/"
+        local nMerged nMergeJobs
+        # grep on the file name, not just non-empty lines: alien.py prints its "Not a directory" error
+        # for a missing path as a line too.
+        nMerged=$(alien.py find "${MERGED_PATH}" "o2tpc_residuals*.root" 2>/dev/null | grep -c 'o2tpc_residuals[^/]*\.root$' || true)
+        if (( nMerged > 0 )); then
+            nMergeJobs=$(alien.py ls "${MERGED_PATH}" 2>/dev/null | grep -c '/$' || true)
+            echo "  [${RUN}] Using merged residuals: ${nMerged} file(s) in ${nMergeJobs} merge job dir(s) under ${MERGED_PATH}"
+            if (( nMerged < nMergeJobs )); then
+                echo "  [${RUN}] WARNING: only ${nMerged}/${nMergeJobs} merge jobs produced o2tpc_residuals.root (failed or still running) -- this run's map misses that share of the statistics."
+            fi
+            ALIEN_PATH="${MERGED_PATH}"
+        else
+            echo "  [${RUN}] WARNING: no merged residuals under ${MERGED_PATH} -- falling back to the per-job files under ${ALIEN_PATH}"
+        fi
+    fi
 
     echo "  [${RUN}] Calling makeResidualLists.sh (alien path: ${ALIEN_PATH})..."
     (
