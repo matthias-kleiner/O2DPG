@@ -209,6 +209,10 @@ if [[ "${ALIEN_JDL_EXTRACTCOSMICS:-}" == "1" ]]; then
   export ADD_CALIB=1
 fi
 
+if [[ "${ALIEN_JDL_EXTRACTV0S:-}" == "1" ]]; then
+  export ADD_CALIB=1
+fi
+
 if [[ "$ALIEN_JDL_DOTPCTIMEGAINCALIB" == "1" ]]; then
   export ADD_CALIB=1
 fi

@@ -817,6 +817,20 @@ if [[ $ADD_CALIB == "1" ]]; then
       export COSMICS_PV_VETO=$ALIEN_JDL_COSMICSPVVETO
     fi
   fi
+  # V0s (K0s, Lambda, photon conversions) with the raw clusters of their prongs -> o2_v0s_full.root (o2-sv-study-workflow --full-output)
+  if [[ -n ${ALIEN_JDL_EXTRACTV0S:-} ]] ; then
+    echo "Adding V0s with raw clusters in setenv_extra.sh"
+    export CALIB_ASYNC_EXTRACTV0S=$ALIEN_JDL_EXTRACTV0S
+    # the V0 finder sends its full V0s, so that the study device does not refit them
+    export CONFIG_EXTRA_PROCESS_o2_secondary_vertexing_workflow+=";svertexer.createFullV0s=true"
+    # optional: V0 finder settings (svertexer.*) and selection / downsampling of the output (svFullOutput.*)
+    if [[ -n ${ALIEN_JDL_V0SFINDERCONFIG:-} ]]; then
+      export CONFIG_EXTRA_PROCESS_o2_secondary_vertexing_workflow+=";$ALIEN_JDL_V0SFINDERCONFIG"
+    fi
+    if [[ -n ${ALIEN_JDL_V0SCONFIG:-} ]]; then
+      export CONFIG_EXTRA_PROCESS_o2_sv_study_workflow+=";$ALIEN_JDL_V0SCONFIG"
+    fi
+  fi
   if [[ $ALIEN_JDL_DOUPLOADSLOCALLY == 1 ]]; then
     export CCDB_POPULATOR_UPLOAD_PATH="file://$PWD"
   fi
